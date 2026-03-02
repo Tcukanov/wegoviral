@@ -8,6 +8,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@wegoviral/shared": "*",
     "axios": "^1.6.7",
     "clsx": "^2.1.0",

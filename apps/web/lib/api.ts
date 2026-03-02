@@ -8,9 +8,17 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
+// For the Express backend (analyze, trending)
 const api = axios.create({
   baseURL: API_URL,
   timeout: 60000,
+  withCredentials: true,
+});
+
+// For Next.js API routes (dashboard/auth) — same origin, relative URLs
+const localApi = axios.create({
+  baseURL: "/",
+  timeout: 30000,
   withCredentials: true,
 });
 
@@ -158,31 +166,31 @@ export interface ContentIdea {
 }
 
 export async function fetchDashboardMe(): Promise<{ connected: boolean; profile: IGProfile }> {
-  const { data } = await api.get("/auth/instagram/me");
+  const { data } = await localApi.get("/api/auth/instagram/me");
   return data;
 }
 
 export async function fetchDashboardMedia(limit = 20): Promise<{ media: IGMedia[] }> {
-  const { data } = await api.get("/auth/instagram/media", { params: { limit } });
+  const { data } = await localApi.get("/api/auth/instagram/media", { params: { limit } });
   return data;
 }
 
 export async function fetchDashboardInsights(): Promise<{ insights: IGAccountInsights }> {
-  const { data } = await api.get("/auth/instagram/insights");
+  const { data } = await localApi.get("/api/auth/instagram/insights");
   return data;
 }
 
 export async function generateContentIdeas(media: IGMedia[]): Promise<{ ideas: ContentIdea[] }> {
-  const { data } = await api.post("/auth/instagram/ideas", { media });
+  const { data } = await localApi.post("/api/auth/instagram/ideas", { media });
   return data;
 }
 
 export async function disconnectInstagram(): Promise<void> {
-  await api.delete("/auth/instagram/disconnect");
+  await localApi.delete("/api/auth/instagram/disconnect");
 }
 
 export function getConnectUrl(): string {
-  return `${API_URL}/auth/instagram`;
+  return "/api/auth/instagram";
 }
 
 export function getVerdictMeta(score: number): {
