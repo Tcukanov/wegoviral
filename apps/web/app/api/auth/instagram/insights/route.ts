@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "not_connected" }, { status: 401 });
 
   try {
-    const insights = await getAccountInsights(session.accessToken);
+    const insights = await getAccountInsights(session.igAccountId, session.accessToken);
     return NextResponse.json({ insights });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Failed to fetch insights";
