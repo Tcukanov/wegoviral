@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  transpilePackages: ["@wegoviral/shared"],
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**.cdninstagram.com" },
