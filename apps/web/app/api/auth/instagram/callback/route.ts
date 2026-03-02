@@ -12,23 +12,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard?error=oauth_cancelled", request.url));
   }
 
-  const appUrl     = process.env.NEXT_PUBLIC_APP_URL || "https://wegoviral.vercel.app";
-  const redirectUri = `${appUrl}/api/auth/instagram/callback`;
+  const appUrl      = process.env.NEXT_PUBLIC_APP_URL || "https://wegoviral.vercel.app";
+  const redirectUri  = `${appUrl}/api/auth/instagram/callback`;
 
   try {
     const result = await completeOAuthFlow(code, redirectUri);
 
     const sessionData: SessionData = {
-      pageAccessToken: result.pageAccessToken,
-      igAccountId:     result.igAccountId,
-      igUsername:      result.profile.username,
-      igName:          result.profile.name,
-      igFollowers:     result.profile.followers_count,
-      igFollowing:     result.profile.follows_count,
-      igMediaCount:    result.profile.media_count,
-      igProfilePic:    result.profile.profile_picture_url,
-      igBio:           result.profile.biography,
-      exp:             Date.now() + 60 * 24 * 60 * 60 * 1000,
+      accessToken:  result.accessToken,
+      igAccountId:  result.igAccountId,
+      igUsername:   result.profile.username,
+      igName:       result.profile.name,
+      igFollowers:  result.profile.followers_count,
+      igFollowing:  result.profile.follows_count,
+      igMediaCount: result.profile.media_count,
+      igProfilePic: result.profile.profile_picture_url,
+      igBio:        result.profile.biography,
+      exp:          Date.now() + 60 * 24 * 60 * 60 * 1000,
     };
 
     const response = NextResponse.redirect(new URL("/dashboard?connected=1", request.url));

@@ -1,17 +1,17 @@
 /**
- * Instagram Graph API Service
+ * Instagram Business Login API
  *
- * Wraps Facebook's Graph API to access Instagram Business/Creator account data.
- * Requires a Facebook App with instagram_basic + instagram_manage_insights permissions.
+ * Uses the modern Instagram OAuth flow (not Facebook Login):
+ *   Auth URL:      https://www.instagram.com/oauth/authorize
+ *   Token URL:     https://api.instagram.com/oauth/access_token
+ *   Long-lived:    https://graph.instagram.com/access_token
+ *   API base:      https://graph.instagram.com
  *
- * Auth flow:
- *   1. User authorizes via Facebook OAuth → we get a short-lived user token
- *   2. Exchange for long-lived user token (60 days)
- *   3. Get user's Facebook Pages → find connected Instagram Business Account
- *   4. Use the Page access token for all subsequent Graph API calls
+ * Required scopes: instagram_business_basic, instagram_business_manage_insights
  */
 
-const GRAPH_API = "https://graph.facebook.com/v19.0";
+const IG_AUTH_API  = "https://api.instagram.com";
+const GRAPH_API    = "https://graph.instagram.com";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,7 +36,6 @@ export interface IGMedia {
   timestamp: string;
   like_count: number;
   comments_count: number;
-  // filled in after insights call
   impressions?: number;
   reach?: number;
   saved?: number;
@@ -51,9 +50,8 @@ export interface IGAccountInsights {
   followerDelta7d: number;
 }
 
-export interface TokenExchangeResult {
-  userAccessToken: string;
-  pageAccessToken: string;
+export interface OAuthResult {
+  accessToken: string;
   igAccountId: string;
   profile: IGProfile;
   expiresAt: Date | null;
@@ -65,154 +63,103 @@ async function graphFetch<T>(path: string, token: string, params: Record<string,
   const url = new URL(`${GRAPH_API}${path}`);
   url.searchParams.set("access_token", token);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-
-  const res = await fetch(url.toString());
+  const res  = await fetch(url.toString());
   const json = await res.json() as T & { error?: { message: string; code: number } };
-
   if ((json as { error?: { message: string } }).error) {
-    const err = (json as { error: { message: string; code: number } }).error;
-    throw new Error(`Graph API error (${err.code}): ${err.message}`);
+    throw new Error(`Instagram API: ${(json as { error: { message: string } }).error.message}`);
   }
   return json;
 }
 
-// ─── OAuth token exchange ─────────────────────────────────────────────────────
+// ─── OAuth flow ───────────────────────────────────────────────────────────────
 
-/** Exchange short-lived code for a short-lived user access token */
-export async function exchangeCodeForToken(code: string, redirectUri: string): Promise<{ access_token: string; token_type: string }> {
-  const appId = process.env.FB_APP_ID!;
-  const appSecret = process.env.FB_APP_SECRET!;
-  const url = new URL(`${GRAPH_API}/oauth/access_token`);
-  url.searchParams.set("client_id", appId);
-  url.searchParams.set("client_secret", appSecret);
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("code", code);
-
-  const res = await fetch(url.toString());
-  const json = await res.json() as { access_token: string; token_type: string; error?: { message: string } };
-  if (json.error) throw new Error(`Token exchange failed: ${json.error.message}`);
-  return json;
+export function buildOAuthUrl(redirectUri: string): string {
+  const url = new URL("https://www.instagram.com/oauth/authorize");
+  url.searchParams.set("client_id",     process.env.FB_APP_ID!);
+  url.searchParams.set("redirect_uri",  redirectUri);
+  url.searchParams.set("scope",         "instagram_business_basic,instagram_business_manage_insights");
+  url.searchParams.set("response_type", "code");
+  return url.toString();
 }
 
-/** Exchange short-lived token for long-lived token (60 days) */
-export async function exchangeForLongLivedToken(shortLivedToken: string): Promise<{ access_token: string; expires_in: number }> {
-  const appId = process.env.FB_APP_ID!;
-  const appSecret = process.env.FB_APP_SECRET!;
-  const url = new URL(`${GRAPH_API}/oauth/access_token`);
-  url.searchParams.set("grant_type", "fb_exchange_token");
-  url.searchParams.set("client_id", appId);
-  url.searchParams.set("client_secret", appSecret);
-  url.searchParams.set("fb_exchange_token", shortLivedToken);
+export async function completeOAuthFlow(code: string, redirectUri: string): Promise<OAuthResult> {
+  // 1. Exchange code for short-lived token
+  const body = new URLSearchParams({
+    client_id:     process.env.FB_APP_ID!,
+    client_secret: process.env.FB_APP_SECRET!,
+    grant_type:    "authorization_code",
+    redirect_uri:  redirectUri,
+    code,
+  });
 
-  const res = await fetch(url.toString());
-  const json = await res.json() as { access_token: string; expires_in: number; error?: { message: string } };
-  if (json.error) throw new Error(`Long-lived token exchange failed: ${json.error.message}`);
-  return json;
-}
-
-// ─── Account discovery ────────────────────────────────────────────────────────
-
-/** Get the user's Facebook Pages + linked Instagram Business Accounts */
-async function getInstagramAccountFromPages(userToken: string): Promise<{ igAccountId: string; pageAccessToken: string } | null> {
-  const pagesRes = await graphFetch<{ data: { id: string; access_token: string }[] }>(
-    "/me/accounts",
-    userToken,
-    { fields: "id,name,access_token" }
-  );
-
-  for (const page of pagesRes.data) {
-    try {
-      const igRes = await graphFetch<{ instagram_business_account?: { id: string } }>(
-        `/${page.id}`,
-        page.access_token,
-        { fields: "instagram_business_account" }
-      );
-      if (igRes.instagram_business_account?.id) {
-        return {
-          igAccountId: igRes.instagram_business_account.id,
-          pageAccessToken: page.access_token,
-        };
-      }
-    } catch {
-      // this page has no linked IG account, continue
-    }
-  }
-  return null;
-}
-
-// ─── Full OAuth flow ──────────────────────────────────────────────────────────
-
-/**
- * Complete the OAuth flow: code → tokens → IG account → profile
- * Returns everything needed to store in ConnectedAccount
- */
-export async function completeOAuthFlow(code: string, redirectUri: string): Promise<TokenExchangeResult> {
-  // 1. Get short-lived user token
-  const { access_token: shortLived } = await exchangeCodeForToken(code, redirectUri);
-
-  // 2. Get long-lived user token
-  const { access_token: userAccessToken, expires_in } = await exchangeForLongLivedToken(shortLived);
-  const expiresAt = expires_in ? new Date(Date.now() + expires_in * 1000) : null;
-
-  // 3. Find Instagram Business Account via Facebook Pages
-  const igInfo = await getInstagramAccountFromPages(userAccessToken);
-  if (!igInfo) {
-    throw new Error(
-      "No Instagram Business or Creator account linked to your Facebook Pages. " +
-      "Convert your account to Business/Creator in Instagram settings, then link it to a Facebook Page."
-    );
+  const tokenRes  = await fetch(`${IG_AUTH_API}/oauth/access_token`, {
+    method:  "POST",
+    body,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+  const tokenData = await tokenRes.json() as {
+    access_token?: string; user_id?: number;
+    error?: { message: string };
+  };
+  if (tokenData.error || !tokenData.access_token) {
+    throw new Error(tokenData.error?.message || "Token exchange failed");
   }
 
-  const { igAccountId, pageAccessToken } = igInfo;
+  // 2. Exchange for long-lived token (60 days)
+  const llUrl = new URL(`${GRAPH_API}/access_token`);
+  llUrl.searchParams.set("grant_type",    "ig_exchange_token");
+  llUrl.searchParams.set("client_id",     process.env.FB_APP_ID!);
+  llUrl.searchParams.set("client_secret", process.env.FB_APP_SECRET!);
+  llUrl.searchParams.set("access_token",  tokenData.access_token);
 
-  // 4. Get Instagram profile
-  const profile = await getIGProfile(igAccountId, pageAccessToken);
+  const llRes  = await fetch(llUrl.toString());
+  const llData = await llRes.json() as {
+    access_token?: string; expires_in?: number; error?: { message: string };
+  };
+  if (llData.error || !llData.access_token) {
+    throw new Error(llData.error?.message || "Long-lived token exchange failed");
+  }
 
-  return { userAccessToken, pageAccessToken, igAccountId, profile, expiresAt };
+  const accessToken = llData.access_token;
+  const expiresAt   = llData.expires_in ? new Date(Date.now() + llData.expires_in * 1000) : null;
+  const profile     = await getIGProfile(accessToken);
+
+  return { accessToken, igAccountId: profile.id, profile, expiresAt };
 }
 
 // ─── Data fetchers ─────────────────────────────────────────────────────────────
 
-export async function getIGProfile(igAccountId: string, token: string): Promise<IGProfile> {
-  return graphFetch<IGProfile>(
-    `/${igAccountId}`,
-    token,
-    { fields: "id,username,name,biography,followers_count,follows_count,media_count,profile_picture_url" }
-  );
+export async function getIGProfile(token: string): Promise<IGProfile> {
+  return graphFetch<IGProfile>("/me", token, {
+    fields: "id,username,name,biography,followers_count,follows_count,media_count,profile_picture_url",
+  });
 }
 
-export async function getIGMedia(igAccountId: string, token: string, limit = 20): Promise<IGMedia[]> {
-  const res = await graphFetch<{ data: IGMedia[] }>(
-    `/${igAccountId}/media`,
-    token,
-    {
-      fields: "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count",
-      limit: String(limit),
-    }
-  );
+export async function getIGMedia(token: string, limit = 20): Promise<IGMedia[]> {
+  const res = await graphFetch<{ data: IGMedia[] }>("/me/media", token, {
+    fields: "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count",
+    limit:  String(limit),
+  });
   return res.data;
 }
 
-/** Fetch per-post insights (impressions, reach, saves, video_views) */
 async function getMediaInsights(mediaId: string, mediaType: IGMedia["media_type"], token: string): Promise<Partial<IGMedia>> {
-  const metricsForType = mediaType === "VIDEO"
-    ? "impressions,reach,saved,video_views,shares"
-    : "impressions,reach,saved";
+  const metrics = mediaType === "VIDEO"
+    ? "impressions,reach,saved,video_views,total_interactions"
+    : "impressions,reach,saved,total_interactions";
 
   try {
-    const res = await graphFetch<{ data: { name: string; values: { value: number }[] }[] }>(
-      `/${mediaId}/insights`,
-      token,
-      { metric: metricsForType }
+    const res = await graphFetch<{ data: { name: string; values?: { value: number }[]; value?: number }[] }>(
+      `/${mediaId}/insights`, token, { metric: metrics }
     );
     const out: Partial<IGMedia> = {};
     for (const m of res.data) {
-      const v = m.values?.[0]?.value ?? 0;
-      if (m.name === "impressions")  out.impressions  = v;
-      if (m.name === "reach")        out.reach        = v;
-      if (m.name === "saved")        out.saved        = v;
-      if (m.name === "video_views")  out.video_views  = v;
-      if (m.name === "shares")       out.shares       = v;
+      const v = m.value ?? m.values?.[0]?.value ?? 0;
+      if (m.name === "impressions")        out.impressions  = v;
+      if (m.name === "reach")              out.reach        = v;
+      if (m.name === "saved")              out.saved        = v;
+      if (m.name === "video_views")        out.video_views  = v;
+      if (m.name === "total_interactions") out.shares       = v;
     }
     return out;
   } catch {
@@ -220,45 +167,34 @@ async function getMediaInsights(mediaId: string, mediaType: IGMedia["media_type"
   }
 }
 
-/** Enrich a media list with insights (parallel fetches) */
 export async function enrichMediaWithInsights(media: IGMedia[], token: string): Promise<IGMedia[]> {
-  const withInsights = await Promise.all(
-    media.map(async (post) => {
-      const insights = await getMediaInsights(post.id, post.media_type, token);
-      return { ...post, ...insights };
-    })
-  );
-  return withInsights;
+  return Promise.all(media.map(async post => ({
+    ...post,
+    ...(await getMediaInsights(post.id, post.media_type, token)),
+  })));
 }
 
-/** Account-level insights for last 7 days */
-export async function getAccountInsights(igAccountId: string, token: string): Promise<IGAccountInsights> {
+export async function getAccountInsights(token: string): Promise<IGAccountInsights> {
   const since = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
   const until = Math.floor(Date.now() / 1000);
-
-  const defaultInsights: IGAccountInsights = { impressions7d: 0, reach7d: 0, profileViews7d: 0, followerDelta7d: 0 };
+  const result: IGAccountInsights = { impressions7d: 0, reach7d: 0, profileViews7d: 0, followerDelta7d: 0 };
 
   try {
     const res = await graphFetch<{ data: { name: string; values: { value: number }[] }[] }>(
-      `/${igAccountId}/insights`,
-      token,
-      {
+      "/me/insights", token, {
         metric: "impressions,reach,profile_views",
         period: "day",
-        since: String(since),
-        until: String(until),
+        since:  String(since),
+        until:  String(until),
       }
     );
-
-    const sum = (values: { value: number }[]) => values.reduce((a, b) => a + b.value, 0);
+    const sum = (vals: { value: number }[]) => vals.reduce((a, b) => a + b.value, 0);
     for (const m of res.data) {
-      if (m.name === "impressions")   defaultInsights.impressions7d   = sum(m.values);
-      if (m.name === "reach")         defaultInsights.reach7d         = sum(m.values);
-      if (m.name === "profile_views") defaultInsights.profileViews7d  = sum(m.values);
+      if (m.name === "impressions")   result.impressions7d   = sum(m.values);
+      if (m.name === "reach")         result.reach7d         = sum(m.values);
+      if (m.name === "profile_views") result.profileViews7d  = sum(m.values);
     }
-  } catch {
-    // insights may fail for new/limited accounts — return zeros
-  }
+  } catch { /* insights may not be available for all accounts */ }
 
-  return defaultInsights;
+  return result;
 }

@@ -7,10 +7,9 @@ export async function GET(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "not_connected" }, { status: 401 });
 
   try {
-    const profile = await getIGProfile(session.igAccountId, session.pageAccessToken);
+    const profile = await getIGProfile(session.accessToken);
     return NextResponse.json({ connected: true, profile });
   } catch {
-    // Return cached data from the session cookie
     return NextResponse.json({
       connected: true,
       profile: {

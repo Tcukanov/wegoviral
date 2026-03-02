@@ -15,7 +15,7 @@ function getKey(): Buffer {
 }
 
 export interface SessionData {
-  pageAccessToken: string;
+  accessToken: string;
   igAccountId: string;
   igUsername: string;
   igName?: string;

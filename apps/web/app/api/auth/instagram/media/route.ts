@@ -9,8 +9,8 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(Number(new URL(request.url).searchParams.get("limit")) || 20, 50);
 
   try {
-    const media    = await getIGMedia(session.igAccountId, session.pageAccessToken, limit);
-    const enriched = await enrichMediaWithInsights(media, session.pageAccessToken);
+    const media    = await getIGMedia(session.accessToken, limit);
+    const enriched = await enrichMediaWithInsights(media, session.accessToken);
     return NextResponse.json({ media: enriched });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Failed to fetch media";
