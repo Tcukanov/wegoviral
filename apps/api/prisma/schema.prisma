@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model TrendingReel {
+  id              String           @id @default(cuid())
+  instagramId     String           @unique
+  url             String
+  username        String
+  displayName     String?
+  avatarUrl       String?
+  thumbnailUrl    String
+  caption         String
+  hashtags        String[]
+  audioName       String?
+  isAudioTrending Boolean          @default(false)
+  views           Int
+  likes           Int
+  comments        Int
+  duration        Int
+  postedAt        DateTime?
+  viralScore      Int
+  category        String
+  scrapedAt       DateTime         @default(now())
+  source          String           @default("creator")
+  followerCount   Int?
+  velocityPerHour Float            @default(0)
+  peakVelocity    Float            @default(0)
+  discoveredAt    DateTime         @default(now())
+  analysis        TrendingAnalysis?
+  snapshots       ReelSnapshot[]
+
+  @@index([viralScore(sort: Desc)])
+  @@index([category, viralScore(sort: Desc)])
+  @@index([source])
+}
+
+model ReelSnapshot {
+  id         String       @id @default(cuid())
+  reelId     String
+  reel       TrendingReel @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  views      Int
+  likes      Int
+  comments   Int
+  capturedAt DateTime     @default(now())
+
+  @@index([reelId, capturedAt(sort: Desc)])
+}
+
+model TrendingAnalysis {
+  id                 String       @id @default(cuid())
+  reelId             String       @unique
+  reel               TrendingReel @relation(fields: [reelId], references: [id])
+  tldr               String
+  whyItWentViral     String
+  hookAnalysis       String
+  retentionDevice    String
+  sendTrigger        String
+  saveTrigger        String
+  audioStrategy      String
+  captionStrategy    String
+  formatBreakdown    Json
+  emotionTriggers    String[]
+  replicationPrompt  String
+  adaptationTips     String[]
+  nicheFitCategories String[]
+  viralWindow        String
+  createdAt          DateTime     @default(now())
+}
+
+model UserPostAnalysis {
+  id                   String   @id @default(cuid())
+  instagramUrl         String
+  instagramId          String
+  username             String
+  category             String   @default("other")
+  thumbnailUrl         String?
+  caption              String
+  hashtags             String[]
+  audioName            String?
+  views                Int
+  likes                Int
+  comments             Int
+  duration             Int
+  overallScore         Int
+  hookScore            Int
+  captionScore         Int
+  audioScore           Int
+  formatScore          Int
+  engagementScore      Int
+  likeRate             Float
+  commentRate          Float
+  benchmarkLikeRate    Float
+  benchmarkCommentRate Float
+  verdict              String
+  whatWentWrong        String[]
+  quickFixes           String[]
+  hookFeedback         String
+  captionFeedback      String
+  audioFeedback        String
+  formatFeedback       String
+  rewrittenCaption     String
+  improvedPrompt       String
+  potentialWithFixes   Int
+  // Viral probability breakdown
+  viralProbability     Float    @default(0)
+  optimizedProbability Float    @default(0)
+  probabilityBoosts    Json     @default("[]")
+  // Niche comparison signals
+  nicheComparison      Json     @default("{}")
+  createdAt            DateTime @default(now())
+}
+
+model ConnectedAccount {
+  id               String    @id @default(cuid())
+  sessionId        String    @unique
+  igAccountId      String
+  igUsername       String
+  igName           String?
+  igBio            String?
+  igFollowers      Int       @default(0)
+  igFollowing      Int       @default(0)
+  igMediaCount     Int       @default(0)
+  igProfilePic     String?
+  pageAccessToken  String
+  userAccessToken  String
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([sessionId])
+}
+
+model ScraperRun {
+  id         String    @id @default(cuid())
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  reelsFound Int       @default(0)
+  status     String
+  error      String?
+}
